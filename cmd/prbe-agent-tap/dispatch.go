@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
+	"github.com/prbe-ai/prbe-agent-tap/internal/backfill"
 	"github.com/prbe-ai/prbe-agent-tap/internal/creds"
 	"github.com/prbe-ai/prbe-agent-tap/internal/heartbeat"
 	"github.com/prbe-ai/prbe-agent-tap/internal/httpclient"
@@ -241,9 +243,65 @@ func runStatus(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	defer s.Close()
 	return status.Render(s, stdout, *verbose)
 }
-func runBackfill(_ context.Context, _ []string, _, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "backfill: not yet implemented (Task 22)")
-	return 2
+func runBackfill(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("backfill", flag.ContinueOnError)
+	days := fs.Int("days", 365, "how many days back to ship (max 365)")
+	since := fs.String("since", "", "ship sessions modified on or after YYYY-MM-DD (clamped to 365d)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *days > 365 {
+		*days = 365
+	}
+	cutoff := time.Now().Add(-time.Duration(*days) * 24 * time.Hour)
+	if *since != "" {
+		t, err := time.Parse("2006-01-02", *since)
+		if err != nil {
+			fmt.Fprintln(stderr, "invalid --since (want YYYY-MM-DD):", err)
+			return 2
+		}
+		cutoff = t
+	}
+
+	statePath, err := stateDBPath()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	s, err := storage.Open(statePath)
+	if err != nil {
+		fmt.Fprintln(stderr, "open state.db:", err)
+		return 1
+	}
+	defer s.Close()
+
+	hc := httpclient.New(httpclient.Options{BaseURL: apiBaseURL(), Version: version.Version})
+	d := outbox.New(outbox.Config{
+		Storage:        s,
+		Client:         hc,
+		BearerProvider: func() (string, error) { return creds.Load("device-token") },
+	})
+	go func() { _ = d.Run(ctx) }()
+
+	if err := backfill.Run(backfill.Config{
+		Root:         claudeProjectsDir(),
+		Since:        cutoff,
+		Storage:      s,
+		DeviceIDFunc: func() (string, error) { return s.GetMeta("device_id") },
+	}); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	for {
+		rows, _ := s.OutboxRowCount()
+		if rows == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	fmt.Fprintln(stdout, "backfill complete.")
+	return 0
 }
 func runInstall(_ context.Context, _ []string, _, stderr io.Writer) int {
 	fmt.Fprintln(stderr, "install: not yet implemented (Task 25)")

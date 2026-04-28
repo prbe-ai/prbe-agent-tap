@@ -110,3 +110,12 @@ func (s *Storage) ClearOutbox() (int64, error) {
 	}
 	return res.RowsAffected()
 }
+
+func (s *Storage) OutboxRowCount() (int64, error) {
+	var n int64
+	row := s.db.QueryRow(`SELECT COUNT(*) FROM outbox`)
+	if err := row.Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
