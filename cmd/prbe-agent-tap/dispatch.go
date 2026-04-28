@@ -13,6 +13,7 @@ import (
 	"github.com/prbe-ai/prbe-agent-tap/internal/heartbeat"
 	"github.com/prbe-ai/prbe-agent-tap/internal/httpclient"
 	"github.com/prbe-ai/prbe-agent-tap/internal/pair"
+	"github.com/prbe-ai/prbe-agent-tap/internal/revoke"
 	"github.com/prbe-ai/prbe-agent-tap/internal/storage"
 	"github.com/prbe-ai/prbe-agent-tap/internal/version"
 )
@@ -139,9 +140,26 @@ func runHeartbeat(ctx context.Context, _ []string, _, stderr io.Writer) int {
 	}
 	return 0
 }
-func runRevoke(_ context.Context, _ []string, _, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "revoke: not yet implemented (Task 14)")
-	return 2
+func runRevoke(ctx context.Context, _ []string, stdout, stderr io.Writer) int {
+	statePath, err := stateDBPath()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	s, err := storage.Open(statePath)
+	if err != nil {
+		fmt.Fprintln(stderr, "open state.db:", err)
+		return 1
+	}
+	defer s.Close()
+	tok, _ := creds.Load("device-token")
+	hc := httpclient.New(httpclient.Options{BaseURL: apiBaseURL(), Version: version.Version})
+	if err := revoke.Run(ctx, revoke.Args{DeviceToken: tok, Storage: s, Client: hc}); err != nil {
+		fmt.Fprintln(stderr, "server-side revoke failed (local state still wiped):", err)
+		return 0
+	}
+	fmt.Fprintln(stdout, "Revoked. Local credentials and state cleared.")
+	return 0
 }
 func runStatus(_ context.Context, _ []string, _, stderr io.Writer) int {
 	fmt.Fprintln(stderr, "status: not yet implemented (Task 21)")
