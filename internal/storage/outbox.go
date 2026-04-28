@@ -119,3 +119,19 @@ func (s *Storage) OutboxRowCount() (int64, error) {
 	}
 	return n, nil
 }
+
+// MaxBatchSeq returns the highest batch_seq for sessionID currently in the
+// outbox, or -1 if no rows exist for that session.
+func (s *Storage) MaxBatchSeq(sessionID string) (int64, error) {
+	var max sql.NullInt64
+	row := s.db.QueryRow(
+		`SELECT MAX(batch_seq) FROM outbox WHERE session_id = ?`, sessionID,
+	)
+	if err := row.Scan(&max); err != nil {
+		return -1, err
+	}
+	if !max.Valid {
+		return -1, nil
+	}
+	return max.Int64, nil
+}

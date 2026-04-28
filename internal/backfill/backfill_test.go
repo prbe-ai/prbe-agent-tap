@@ -79,6 +79,61 @@ func TestEnumerateSkipsSymlinks(t *testing.T) {
 	}
 }
 
+// TestBackfillResumeUsesNextSeq verifies that when a row with (session_id,
+// batch_seq) = ("X", 0) already exists, backfill assigns batch_seq >= 1 to
+// newly-enqueued rows rather than colliding at 0.
+func TestBackfillResumeUsesNextSeq(t *testing.T) {
+	s, _ := storage.Open(t.TempDir() + "/state.db")
+	defer s.Close()
+
+	sessID := "resume-sess"
+
+	// Pre-insert a row simulating a prior run or concurrent watch.
+	now := time.Now().Unix()
+	if err := s.EnqueueBatch(storage.OutboxRow{
+		SessionID: sessID, BatchSeq: 0, CWD: "/Users/x/repo", Body: []byte(`{}`),
+		CreatedAt: now, NextAttemptAt: now,
+	}); err != nil {
+		t.Fatal("pre-insert failed:", err)
+	}
+
+	// Create a JSONL file with two lines.
+	dir := t.TempDir()
+	root := filepath.Join(dir, "projects")
+	proj := filepath.Join(root, "-Users-x-repo")
+	_ = os.MkdirAll(proj, 0o755)
+	path := filepath.Join(proj, sessID+".jsonl")
+	_ = os.WriteFile(path, []byte(`{"a":1}`+"\n"+`{"b":2}`+"\n"), 0o600)
+
+	cfg := Config{
+		Root:          root,
+		Since:         time.Now().Add(-time.Hour),
+		Storage:       s,
+		BatchMaxLines: 2,
+		TargetDepth:   50,
+		LowWater:      25,
+		DeviceIDFunc:  func() (string, error) { return "dev", nil },
+	}
+	if err := Run(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Collect all batch_seq values for sessID.
+	count, _ := s.OutboxRowCount()
+	if count < 2 {
+		t.Fatalf("expected at least 2 rows (pre-insert + new), got %d", count)
+	}
+
+	// The new row must have batch_seq >= 1.
+	max, err := s.MaxBatchSeq(sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if max < 1 {
+		t.Fatalf("expected max batch_seq >= 1 after resume, got %d", max)
+	}
+}
+
 func TestEnqueueDrainsToTarget(t *testing.T) {
 	s, _ := storage.Open(t.TempDir() + "/state.db")
 	defer s.Close()

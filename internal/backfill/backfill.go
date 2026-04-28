@@ -3,6 +3,7 @@ package backfill
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -94,7 +95,10 @@ func Run(cfg Config) error {
 		return fmt.Errorf("enumerate: %w", err)
 	}
 	deviceID, _ := cfg.DeviceIDFunc()
-	var batchSeq int64
+	// nextSeq tracks the next batch_seq to use per session_id, seeded from
+	// the storage so that re-runs and concurrent `watch` processes don't collide
+	// on the (session_id, batch_seq) UNIQUE constraint.
+	nextSeq := map[string]int64{}
 	for _, path := range files {
 		f, err := os.Open(path)
 		if err != nil {
@@ -116,6 +120,16 @@ func Run(cfg Config) error {
 		sessID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 		cwd := strings.ReplaceAll(filepath.Base(filepath.Dir(path)), "-", "/")
 
+		// Seed nextSeq for this session from the current DB state.
+		if _, seen := nextSeq[sessID]; !seen {
+			max, err := cfg.Storage.MaxBatchSeq(sessID)
+			if err != nil {
+				slog.Warn("backfill: MaxBatchSeq failed", "session_id", sessID, "error", err.Error())
+				max = -1
+			}
+			nextSeq[sessID] = max + 1
+		}
+
 		var lineNo int64
 		for i := 0; i < len(lines); i += cfg.BatchMaxLines {
 			end := i + cfg.BatchMaxLines
@@ -123,6 +137,7 @@ func Run(cfg Config) error {
 				end = len(lines)
 			}
 			batch := lines[i:end]
+			batchSeq := nextSeq[sessID]
 			body, err := buildBackfillBody(deviceID, sessID, cwd, batchSeq, lineNo, batch)
 			if err != nil {
 				continue
@@ -132,9 +147,10 @@ func Run(cfg Config) error {
 				SessionID: sessID, BatchSeq: batchSeq, CWD: cwd, Body: body,
 				CreatedAt: now, NextAttemptAt: now,
 			}); err != nil {
+				slog.Warn("backfill: EnqueueBatch failed", "session_id", sessID, "batch_seq", batchSeq, "error", err.Error())
 				continue
 			}
-			batchSeq++
+			nextSeq[sessID]++
 			lineNo += int64(len(batch))
 
 			for {
