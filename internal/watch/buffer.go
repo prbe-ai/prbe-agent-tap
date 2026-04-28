@@ -49,3 +49,8 @@ func (b *Buffer) Drain() [][]byte {
 	b.firstAt = time.Time{}
 	return out
 }
+
+// Peek returns the current lines without resetting state.
+func (b *Buffer) Peek() [][]byte {
+	return b.lines
+}

@@ -259,7 +259,7 @@ func (w *Watcher) flushAll(now time.Time) {
 }
 
 func (w *Watcher) flushLocked(path string, fs *fileState, now time.Time) {
-	lines := fs.buf.Drain()
+	lines := fs.buf.Peek()
 	if len(lines) == 0 {
 		return
 	}
@@ -279,6 +279,9 @@ func (w *Watcher) flushLocked(path string, fs *fileState, now time.Time) {
 	if err := w.cfg.Storage.EnqueueBatch(row); err != nil {
 		return
 	}
+	// Only drain the buffer after a successful enqueue so that a failure
+	// (disk full, UNIQUE constraint, etc.) preserves the lines for retry.
+	fs.buf.Drain()
 	fs.lineNo += int64(len(lines))
 	fs.batchSeq++
 	_ = w.persistOffset(path, fs)

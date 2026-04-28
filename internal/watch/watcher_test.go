@@ -12,6 +12,72 @@ import (
 	"github.com/prbe-ai/prbe-agent-tap/internal/storage"
 )
 
+// TestFlushLockedPreservesBufferOnEnqueueFailure verifies that lines are NOT
+// dropped when EnqueueBatch returns an error (e.g. UNIQUE constraint violation).
+func TestFlushLockedPreservesBufferOnEnqueueFailure(t *testing.T) {
+	dir := t.TempDir()
+	projectDir := filepath.Join(dir, "-Users-foo-bar")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessID := "test-sess-preserve"
+	sessionFile := filepath.Join(projectDir, sessID+".jsonl")
+	line1, _ := json.Marshal(map[string]string{"k": "v1"})
+	if err := os.WriteFile(sessionFile, append(line1, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _ := storage.Open(filepath.Join(t.TempDir(), "state.db"))
+	defer s.Close()
+
+	// Pre-insert a row with (session_id, batch_seq) = (sessID, 0) so that the
+	// watcher's first EnqueueBatch attempt hits a UNIQUE constraint error.
+	now := time.Now().Unix()
+	if err := s.EnqueueBatch(storage.OutboxRow{
+		SessionID:     sessID,
+		BatchSeq:      0,
+		CWD:           "/Users/foo/bar",
+		Body:          []byte(`{}`),
+		CreatedAt:     now,
+		NextAttemptAt: now,
+	}); err != nil {
+		t.Fatal("pre-insert failed:", err)
+	}
+
+	// Build a fileState manually so we can inspect the buffer directly
+	// without running the full watcher goroutine.
+	fs := &fileState{
+		sessID: sessID,
+		cwd:    "/Users/foo/bar",
+		buf: NewBuffer(BufferConfig{
+			MaxLines: 100,
+			MaxAge:   time.Hour,
+		}),
+	}
+	line2, _ := json.Marshal(map[string]string{"k": "v2"})
+	fs.buf.Add(line2)
+
+	watcher := &Watcher{
+		cfg: WatcherConfig{
+			Storage: s,
+			DeviceIDFunc: func() (string, error) {
+				return "dev1", nil
+			},
+		},
+		files: map[string]*fileState{},
+	}
+
+	// Attempt flush; it should fail due to UNIQUE constraint.
+	watcher.mu.Lock()
+	watcher.flushLocked(sessionFile, fs, time.Now())
+	watcher.mu.Unlock()
+
+	// The buffer must still contain the line.
+	if fs.buf.Len() != 1 {
+		t.Fatalf("expected buffer to still hold 1 line after failed flush, got %d", fs.buf.Len())
+	}
+}
+
 func TestWatcherShipsAppendedLines(t *testing.T) {
 	dir := t.TempDir()
 	projectDir := filepath.Join(dir, "-Users-foo-repo")
