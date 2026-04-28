@@ -30,6 +30,9 @@ jobs:
               -o "$out" ./cmd/prbe-agent-tap
             shasum -a 256 "$out" > "$out.sha256"
           done
+          # Bundle the installer script alongside the binaries so the curl|sh
+          # one-liner from the dashboard resolves against the release.
+          cp scripts/install.sh dist/install.sh
           ls -la dist
       - name: publish release
         uses: softprops/action-gh-release@v2
