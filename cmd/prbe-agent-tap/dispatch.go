@@ -15,6 +15,7 @@ import (
 	"github.com/prbe-ai/prbe-agent-tap/internal/outbox"
 	"github.com/prbe-ai/prbe-agent-tap/internal/pair"
 	"github.com/prbe-ai/prbe-agent-tap/internal/revoke"
+	"github.com/prbe-ai/prbe-agent-tap/internal/status"
 	"github.com/prbe-ai/prbe-agent-tap/internal/storage"
 	"github.com/prbe-ai/prbe-agent-tap/internal/version"
 	"github.com/prbe-ai/prbe-agent-tap/internal/watch"
@@ -221,9 +222,24 @@ func runRevoke(ctx context.Context, _ []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "Revoked. Local credentials and state cleared.")
 	return 0
 }
-func runStatus(_ context.Context, _ []string, _, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "status: not yet implemented (Task 21)")
-	return 2
+func runStatus(_ context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	verbose := fs.Bool("verbose", false, "print full UUIDs and extra detail")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	statePath, err := stateDBPath()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	s, err := storage.Open(statePath)
+	if err != nil {
+		fmt.Fprintln(stderr, "open state.db:", err)
+		return 1
+	}
+	defer s.Close()
+	return status.Render(s, stdout, *verbose)
 }
 func runBackfill(_ context.Context, _ []string, _, stderr io.Writer) int {
 	fmt.Fprintln(stderr, "backfill: not yet implemented (Task 22)")
