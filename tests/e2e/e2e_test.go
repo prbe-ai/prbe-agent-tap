@@ -40,7 +40,8 @@ func TestEndToEnd(t *testing.T) {
 	}
 
 	bin := filepath.Join(t.TempDir(), "prbe-agent-tap")
-	if out, err := exec.Command("go", "build", "-o", bin, "./cmd/prbe-agent-tap").CombinedOutput(); err != nil {
+	build := exec.Command("go", "build", "-o", bin, "github.com/prbe-ai/prbe-agent-tap/cmd/prbe-agent-tap")
+	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 

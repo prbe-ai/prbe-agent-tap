@@ -22,9 +22,10 @@ func mintPairingJWT(signingKey, customerID, employeeID string) (string, error) {
 	}
 	now := time.Now().Unix()
 	payload := map[string]any{
-		"iss":         "prbe-backend",
+		"iss":         "api.prbe.ai",
+		"aud":         "agent-tap",
 		"customer_id": customerID,
-		"employee_id": employeeID,
+		"sub":         employeeID,
 		"jti":         fmt.Sprintf("%x", jti),
 		"iat":         now,
 		"exp":         now + 600,
