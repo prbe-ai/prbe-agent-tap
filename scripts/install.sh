@@ -30,7 +30,7 @@ install_dir() {
 }
 
 main() {
-  local os arch dir url tmp bin
+  local os arch dir url tmp bin token
   os="$(detect_os)"
   arch="$(detect_arch)"
   dir="$(install_dir)"
@@ -43,17 +43,24 @@ main() {
   mv "${tmp}" "${bin}"
   echo "Installed ${bin}"
 
-  echo
-  printf "Paste your pairing token from the dashboard: "
-  if [ -t 0 ]; then
-    IFS= read -r token
-  elif [ -e /dev/tty ]; then
-    IFS= read -r token </dev/tty
+  # Token can be passed as the first argument (one-step copy-paste from
+  # the dashboard) or read interactively if missing.
+  if [ "$#" -ge 1 ] && [ -n "${1:-}" ]; then
+    token="$1"
   else
-    echo "no TTY available; rerun and pass the token: ${bin} pair <token>" >&2
-    token=""
+    echo
+    printf "Paste your pairing token from the dashboard: "
+    if [ -t 0 ]; then
+      IFS= read -r token
+    elif [ -e /dev/tty ]; then
+      IFS= read -r token </dev/tty
+    else
+      echo "no TTY available; rerun and pass the token: ${bin} pair <token>" >&2
+      token=""
+    fi
   fi
-  if [ -z "${token}" ]; then
+
+  if [ -z "${token:-}" ]; then
     echo "no token provided; you can pair later with: ${bin} pair <token>" >&2
     exit 0
   fi
