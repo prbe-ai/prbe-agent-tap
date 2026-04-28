@@ -158,16 +158,24 @@ func runWatch(ctx context.Context, _ []string, _, stderr io.Writer) int {
 		BearerProvider: func() (string, error) { return creds.Load("device-token") },
 	})
 
-	errCh := make(chan error, 2)
-	go func() { errCh <- w.Run(ctx) }()
-	go func() { errCh <- d.Run(ctx) }()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
+	errCh := make(chan error, 2)
+	go func() { errCh <- w.Run(runCtx) }()
+	go func() { errCh <- d.Run(runCtx) }()
+
+	var firstErr error
 	for i := 0; i < 2; i++ {
 		err := <-errCh
-		if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-			fmt.Fprintln(stderr, err)
-			return 1
+		if firstErr == nil && err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+			firstErr = err
 		}
+		cancel()
+	}
+	if firstErr != nil {
+		fmt.Fprintln(stderr, firstErr)
+		return 1
 	}
 	return 0
 }
