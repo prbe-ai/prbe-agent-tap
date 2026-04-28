@@ -12,10 +12,12 @@ import (
 	"github.com/prbe-ai/prbe-agent-tap/internal/creds"
 	"github.com/prbe-ai/prbe-agent-tap/internal/heartbeat"
 	"github.com/prbe-ai/prbe-agent-tap/internal/httpclient"
+	"github.com/prbe-ai/prbe-agent-tap/internal/outbox"
 	"github.com/prbe-ai/prbe-agent-tap/internal/pair"
 	"github.com/prbe-ai/prbe-agent-tap/internal/revoke"
 	"github.com/prbe-ai/prbe-agent-tap/internal/storage"
 	"github.com/prbe-ai/prbe-agent-tap/internal/version"
+	"github.com/prbe-ai/prbe-agent-tap/internal/watch"
 )
 
 type subcommand struct {
@@ -111,9 +113,67 @@ func runPair(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	return 0
 }
-func runWatch(_ context.Context, _ []string, _, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "watch: not yet implemented (Task 20)")
-	return 2
+func runWatch(ctx context.Context, _ []string, _, stderr io.Writer) int {
+	statePath, err := stateDBPath()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	s, err := storage.Open(statePath)
+	if err != nil {
+		fmt.Fprintln(stderr, "open state.db:", err)
+		return 1
+	}
+	defer s.Close()
+
+	if v, _ := s.GetMeta("last_401_at"); v != "" {
+		fmt.Fprintln(stderr, "halted: device token revoked at", v, "— run `prbe-agent-tap pair` to resume")
+		return 1
+	}
+
+	deviceID, _ := s.GetMeta("device_id")
+	if deviceID == "" {
+		fmt.Fprintln(stderr, "not paired; run `prbe-agent-tap pair` first")
+		return 1
+	}
+
+	hc := httpclient.New(httpclient.Options{BaseURL: apiBaseURL(), Version: version.Version})
+
+	w, err := watch.NewWatcher(watch.WatcherConfig{
+		ProjectsRoot: claudeProjectsDir(),
+		Storage:      s,
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, "watcher init:", err)
+		return 1
+	}
+
+	d := outbox.New(outbox.Config{
+		Storage:        s,
+		Client:         hc,
+		BearerProvider: func() (string, error) { return creds.Load("device-token") },
+	})
+
+	errCh := make(chan error, 2)
+	go func() { errCh <- w.Run(ctx) }()
+	go func() { errCh <- d.Run(ctx) }()
+
+	for i := 0; i < 2; i++ {
+		err := <-errCh
+		if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	return 0
+}
+
+func claudeProjectsDir() string {
+	if d := os.Getenv("PRBE_CLAUDE_PROJECTS_DIR"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude", "projects")
 }
 func runHeartbeat(ctx context.Context, _ []string, _, stderr io.Writer) int {
 	statePath, err := stateDBPath()
