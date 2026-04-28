@@ -1,6 +1,7 @@
 package backfill
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -80,7 +81,7 @@ type Config struct {
 }
 
 // Run enqueues lines from sessions into the outbox, pacing on outbox depth.
-func Run(cfg Config) error {
+func Run(ctx context.Context, cfg Config) error {
 	if cfg.BatchMaxLines == 0 {
 		cfg.BatchMaxLines = 10
 	}
@@ -100,6 +101,11 @@ func Run(cfg Config) error {
 	// on the (session_id, batch_seq) UNIQUE constraint.
 	nextSeq := map[string]int64{}
 	for _, path := range files {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			continue
@@ -164,7 +170,11 @@ func Run(cfg Config) error {
 				if cfg.DrainObserver != nil && cfg.DrainObserver() {
 					continue
 				}
-				time.Sleep(100 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(100 * time.Millisecond):
+				}
 			}
 		}
 	}

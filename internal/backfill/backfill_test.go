@@ -1,6 +1,7 @@
 package backfill
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -114,7 +115,7 @@ func TestBackfillResumeUsesNextSeq(t *testing.T) {
 		LowWater:      25,
 		DeviceIDFunc:  func() (string, error) { return "dev", nil },
 	}
-	if err := Run(cfg); err != nil {
+	if err := Run(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -155,7 +156,7 @@ func TestEnqueueDrainsToTarget(t *testing.T) {
 		DeviceIDFunc:  func() (string, error) { return "dev", nil },
 		DrainObserver: func() bool { _, _ = s.ClearOutbox(); return true },
 	}
-	if err := Run(cfg); err != nil {
+	if err := Run(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
 }

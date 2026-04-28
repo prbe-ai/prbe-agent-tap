@@ -290,27 +290,71 @@ func runBackfill(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		Client:         hc,
 		BearerProvider: func() (string, error) { return creds.Load("device-token") },
 	})
-	go func() { _ = d.Run(ctx) }()
 
-	if err := backfill.Run(backfill.Config{
+	drainCtx, cancelDrain := context.WithCancel(ctx)
+	defer cancelDrain()
+	drainErrCh := make(chan error, 1)
+	go func() { drainErrCh <- d.Run(drainCtx) }()
+
+	enqErr := backfill.Run(drainCtx, backfill.Config{
 		Root:         claudeProjectsDir(),
 		Since:        cutoff,
 		Storage:      s,
 		DeviceIDFunc: func() (string, error) { return s.GetMeta("device_id") },
-	}); err != nil {
-		fmt.Fprintln(stderr, err)
+	})
+
+	// If enqueue failed (other than ctx cancellation), report.
+	if enqErr != nil && enqErr != context.Canceled && enqErr != context.DeadlineExceeded {
+		fmt.Fprintln(stderr, enqErr)
+		cancelDrain()
+		<-drainErrCh
 		return 1
 	}
 
+	// Wait for drainer to empty the outbox or for ctx/halt.
 	for {
-		rows, _ := s.OutboxRowCount()
-		if rows == 0 {
-			break
+		select {
+		case err := <-drainErrCh:
+			// Drainer exited. If it was a halt, last_401_at is set.
+			if v, _ := s.GetMeta("last_401_at"); v != "" {
+				fmt.Fprintln(stderr, "halted: device token revoked — re-pair to retry backfill")
+				return 1
+			}
+			if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+				fmt.Fprintln(stderr, "drainer:", err)
+				return 1
+			}
+			// Drainer exited normally.
+			rows, _ := s.OutboxRowCount()
+			if rows == 0 {
+				fmt.Fprintln(stdout, "backfill complete.")
+				return 0
+			}
+			fmt.Fprintf(stderr, "drainer exited with %d rows still queued\n", rows)
+			return 1
+		case <-ctx.Done():
+			cancelDrain()
+			<-drainErrCh
+			fmt.Fprintln(stderr, "interrupted")
+			return 1
+		default:
+			rows, _ := s.OutboxRowCount()
+			if rows == 0 {
+				cancelDrain()
+				<-drainErrCh
+				if v, _ := s.GetMeta("last_401_at"); v != "" {
+					fmt.Fprintln(stderr, "halted: device token revoked — re-pair to retry backfill")
+					return 1
+				}
+				fmt.Fprintln(stdout, "backfill complete.")
+				return 0
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(500 * time.Millisecond):
+			}
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
-	fmt.Fprintln(stdout, "backfill complete.")
-	return 0
 }
 func runInstall(_ context.Context, _ []string, stdout, stderr io.Writer) int {
 	if err := install.Install(stdout); err != nil {
