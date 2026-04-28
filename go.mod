@@ -3,6 +3,7 @@ module github.com/prbe-ai/prbe-agent-tap
 go 1.25.0
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/zalando/go-keyring v0.2.8
 	modernc.org/sqlite v1.50.0
 )
