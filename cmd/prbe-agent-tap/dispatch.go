@@ -2,10 +2,17 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"runtime"
 
+	"github.com/prbe-ai/prbe-agent-tap/internal/creds"
+	"github.com/prbe-ai/prbe-agent-tap/internal/httpclient"
+	"github.com/prbe-ai/prbe-agent-tap/internal/pair"
+	"github.com/prbe-ai/prbe-agent-tap/internal/storage"
 	"github.com/prbe-ai/prbe-agent-tap/internal/version"
 )
 
@@ -69,9 +76,38 @@ func printHelp(w io.Writer) {
 
 // Stub implementations; each is replaced in later tasks.
 
-func runPair(_ context.Context, _ []string, _, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "pair: not yet implemented (Task 12)")
-	return 2
+func runPair(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(stderr, "usage: prbe-agent-tap pair <pairing-token>")
+		return 2
+	}
+	token := fs.Arg(0)
+
+	statePath, err := stateDBPath()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	s, err := storage.Open(statePath)
+	if err != nil {
+		fmt.Fprintln(stderr, "open state.db:", err)
+		return 1
+	}
+	defer s.Close()
+
+	hc := httpclient.New(httpclient.Options{BaseURL: apiBaseURL(), Version: version.Version})
+	if err := pair.Run(ctx, pair.Args{
+		PairingToken: token, Storage: s, Client: hc, Stdout: stdout,
+	}); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
 }
 func runWatch(_ context.Context, _ []string, _, stderr io.Writer) int {
 	fmt.Fprintln(stderr, "watch: not yet implemented (Task 20)")
@@ -100,4 +136,22 @@ func runInstall(_ context.Context, _ []string, _, stderr io.Writer) int {
 func runUninstall(_ context.Context, _ []string, _, stderr io.Writer) int {
 	fmt.Fprintln(stderr, "uninstall: not yet implemented (Task 25)")
 	return 2
+}
+
+func apiBaseURL() string {
+	if u := os.Getenv("PRBE_API_BASE_URL"); u != "" {
+		return u
+	}
+	return "https://api.prbe.ai"
+}
+
+func stateDBPath() (string, error) {
+	dir, err := creds.StateDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "state.db"), nil
 }
