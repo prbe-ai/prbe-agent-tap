@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -58,7 +59,8 @@ func (d *Drainer) tick(ctx context.Context) error {
 	now := d.cfg.Now().Unix()
 	row, ok, err := d.cfg.Storage.NextDueBatch(now)
 	if err != nil {
-		return fmt.Errorf("NextDueBatch: %w", err)
+		slog.Warn("drainer: NextDueBatch failed", "error", err.Error())
+		return nil
 	}
 	if !ok {
 		_, _ = d.cfg.Storage.EnforceOutboxCap(d.cfg.MaxBytes)

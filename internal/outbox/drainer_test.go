@@ -104,3 +104,48 @@ func TestDrainerHaltsOn401(t *testing.T) {
 }
 
 func errIsHalt(err error) bool { return err != nil && err.Error() == "halted: device token revoked" }
+
+// TestDrainerContinuesOnTransientDBError verifies that NextDueBatch failures
+// are logged and skipped rather than causing the drainer to exit.
+func TestDrainerContinuesOnTransientDBError(t *testing.T) {
+	s := mustOpenStorage(t)
+
+	// Enqueue one row so the drainer has something to try before we close the DB.
+	now := time.Now().Unix()
+	_ = s.EnqueueBatch(storage.OutboxRow{
+		SessionID: "sid", BatchSeq: 0, CWD: "/", Body: []byte(`{}`),
+		CreatedAt: now, NextAttemptAt: now,
+	})
+
+	// Close the storage immediately so every NextDueBatch call will fail.
+	s.Close()
+
+	// Use a no-op HTTP client; we only care that the drainer keeps ticking.
+	hc := httpclient.New(httpclient.Options{BaseURL: "http://127.0.0.1:0", Version: "test"})
+
+	var ticks int64
+	d := New(Config{
+		Storage: s,
+		Client:  hc,
+		BearerProvider: func() (string, error) { return "tok", nil },
+		PollInterval:   10 * time.Millisecond,
+		Now: func() time.Time {
+			ticks++
+			return time.Now()
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	err := d.Run(ctx)
+
+	// Must exit with context.DeadlineExceeded, not a DB error.
+	if err != context.DeadlineExceeded && err != context.Canceled {
+		t.Fatalf("expected context error, got: %v", err)
+	}
+	// Should have ticked at least twice (drainer kept looping despite errors).
+	if ticks < 2 {
+		t.Fatalf("expected ≥2 ticks, got %d", ticks)
+	}
+}
