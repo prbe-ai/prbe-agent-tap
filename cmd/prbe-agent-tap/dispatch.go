@@ -14,6 +14,7 @@ import (
 	"github.com/prbe-ai/prbe-agent-tap/internal/creds"
 	"github.com/prbe-ai/prbe-agent-tap/internal/heartbeat"
 	"github.com/prbe-ai/prbe-agent-tap/internal/httpclient"
+	"github.com/prbe-ai/prbe-agent-tap/internal/install"
 	"github.com/prbe-ai/prbe-agent-tap/internal/outbox"
 	"github.com/prbe-ai/prbe-agent-tap/internal/pair"
 	"github.com/prbe-ai/prbe-agent-tap/internal/revoke"
@@ -303,13 +304,35 @@ func runBackfill(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	fmt.Fprintln(stdout, "backfill complete.")
 	return 0
 }
-func runInstall(_ context.Context, _ []string, _, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "install: not yet implemented (Task 25)")
-	return 2
+func runInstall(_ context.Context, _ []string, stdout, stderr io.Writer) int {
+	if err := install.Install(stdout); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
 }
-func runUninstall(_ context.Context, _ []string, _, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "uninstall: not yet implemented (Task 25)")
-	return 2
+
+func runUninstall(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	purge := fs.Bool("purge", false, "also remove the binary")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	statePath, err := stateDBPath()
+	if err == nil {
+		if s, err := storage.Open(statePath); err == nil {
+			tok, _ := creds.Load("device-token")
+			hc := httpclient.New(httpclient.Options{BaseURL: apiBaseURL(), Version: version.Version})
+			_ = revoke.Run(ctx, revoke.Args{DeviceToken: tok, Storage: s, Client: hc})
+			s.Close()
+		}
+	}
+	if err := install.Uninstall(nil, *purge, stdout); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
 }
 
 func apiBaseURL() string {
