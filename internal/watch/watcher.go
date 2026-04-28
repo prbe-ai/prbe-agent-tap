@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,7 +84,10 @@ func (w *Watcher) Run(ctx context.Context) error {
 			if ev.Op&(fsnotify.Write|fsnotify.Create) != 0 {
 				w.handleEvent(ev.Name, fw)
 			}
-		case <-fw.Errors:
+		case err := <-fw.Errors:
+			if err != nil {
+				slog.Warn("watch: fsnotify error", "error", err.Error())
+			}
 		case <-t.C:
 			w.tick()
 		}
@@ -114,7 +118,9 @@ func (w *Watcher) bootstrap(fw *fsnotify.Watcher) error {
 		if !info.IsDir() {
 			continue
 		}
-		_ = fw.Add(full)
+		if err := fw.Add(full); err != nil {
+			slog.Warn("watch: fsnotify Add failed", "path", full, "error", err.Error())
+		}
 		files, _ := os.ReadDir(full)
 		for _, f := range files {
 			if !strings.HasSuffix(f.Name(), ".jsonl") {
@@ -213,7 +219,9 @@ func (w *Watcher) handleEvent(path string, fw *fsnotify.Watcher) {
 	if !strings.HasSuffix(path, ".jsonl") {
 		info, err := os.Lstat(path)
 		if err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
-			_ = fw.Add(path)
+			if err := fw.Add(path); err != nil {
+				slog.Warn("watch: fsnotify Add failed", "path", path, "error", err.Error())
+			}
 		}
 		return
 	}
@@ -221,7 +229,9 @@ func (w *Watcher) handleEvent(path string, fw *fsnotify.Watcher) {
 	fs, ok := w.files[path]
 	w.mu.Unlock()
 	if !ok {
-		_ = w.registerExistingFile(path)
+		if err := w.registerExistingFile(path); err != nil {
+			slog.Warn("watch: registerExistingFile failed", "path", path, "error", err.Error())
+		}
 		w.mu.Lock()
 		fs = w.files[path]
 		w.mu.Unlock()
@@ -252,6 +262,7 @@ func (w *Watcher) readAndBuffer(path string, fs *fileState) {
 	defer w.mu.Unlock()
 	lines, err := fs.reader.ReadNew()
 	if err != nil {
+		slog.Warn("watch: read failed", "path", path, "error", err.Error())
 		return
 	}
 	for _, line := range lines {
@@ -289,6 +300,7 @@ func (w *Watcher) flushLocked(path string, fs *fileState, now time.Time) {
 	deviceID, _ := w.cfg.DeviceIDFunc()
 	body, err := buildBatchBody(deviceID, fs.sessID, fs.cwd, fs.batchSeq, fs.lineNo, lines)
 	if err != nil {
+		slog.Warn("watch: buildBatchBody failed", "session", fs.sessID, "error", err.Error())
 		return
 	}
 	row := storage.OutboxRow{
@@ -300,6 +312,7 @@ func (w *Watcher) flushLocked(path string, fs *fileState, now time.Time) {
 		NextAttemptAt: now.Unix(),
 	}
 	if err := w.cfg.Storage.EnqueueBatch(row); err != nil {
+		slog.Warn("watch: EnqueueBatch failed", "session", fs.sessID, "batch_seq", fs.batchSeq, "error", err.Error())
 		return
 	}
 	// Only drain the buffer after a successful enqueue so that a failure
@@ -315,11 +328,15 @@ func (w *Watcher) persistOffset(path string, fs *fileState) error {
 	if err != nil {
 		return err
 	}
-	return w.cfg.Storage.UpsertOffset(storage.FileOffset{
+	if err := w.cfg.Storage.UpsertOffset(storage.FileOffset{
 		Path: path, SessionID: fs.sessID, CWD: fs.cwd,
 		LastLineNo: fs.lineNo, LastSeenAt: time.Now().Unix(),
 		Inode: int64(inodeOf(info)), Size: info.Size(),
-	})
+	}); err != nil {
+		slog.Warn("watch: UpsertOffset failed", "path", path, "error", err.Error())
+		return err
+	}
+	return nil
 }
 
 func buildBatchBody(deviceID, sessionID, cwd string, batchSeq, baseLineNo int64, lines [][]byte) ([]byte, error) {
