@@ -10,6 +10,7 @@ import (
 	"runtime"
 
 	"github.com/prbe-ai/prbe-agent-tap/internal/creds"
+	"github.com/prbe-ai/prbe-agent-tap/internal/heartbeat"
 	"github.com/prbe-ai/prbe-agent-tap/internal/httpclient"
 	"github.com/prbe-ai/prbe-agent-tap/internal/pair"
 	"github.com/prbe-ai/prbe-agent-tap/internal/storage"
@@ -113,9 +114,30 @@ func runWatch(_ context.Context, _ []string, _, stderr io.Writer) int {
 	fmt.Fprintln(stderr, "watch: not yet implemented (Task 20)")
 	return 2
 }
-func runHeartbeat(_ context.Context, _ []string, _, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "heartbeat: not yet implemented (Task 13)")
-	return 2
+func runHeartbeat(ctx context.Context, _ []string, _, stderr io.Writer) int {
+	statePath, err := stateDBPath()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	s, err := storage.Open(statePath)
+	if err != nil {
+		fmt.Fprintln(stderr, "open state.db:", err)
+		return 1
+	}
+	defer s.Close()
+
+	tok, err := creds.Load("device-token")
+	if err != nil || tok == "" {
+		fmt.Fprintln(stderr, "no device token; run `prbe-agent-tap pair` first")
+		return 1
+	}
+	hc := httpclient.New(httpclient.Options{BaseURL: apiBaseURL(), Version: version.Version})
+	if err := heartbeat.Run(ctx, heartbeat.Args{DeviceToken: tok, Storage: s, Client: hc}); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
 }
 func runRevoke(_ context.Context, _ []string, _, stderr io.Writer) int {
 	fmt.Fprintln(stderr, "revoke: not yet implemented (Task 14)")
