@@ -139,48 +139,67 @@ func (w *Watcher) registerExistingFile(path string) error {
 	if _, ok := w.files[path]; ok {
 		return nil
 	}
-	// Use a single open to atomically count existing lines and position the
-	// reader at the end of them, eliminating the TOCTOU window that existed
-	// between the old CurrentLineCount + os.Open pair.
-	reader, existing, err := OpenReaderAtEnd(path)
+
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return statErr
+	}
+	currentInode := int64(inodeOf(info))
+	currentSize := info.Size()
+
+	stored, hasStored, err := w.cfg.Storage.GetOffset(path)
 	if err != nil {
 		return err
 	}
-	sessID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	cwd := decodeProjectDir(filepath.Base(filepath.Dir(path)))
-	fs := &fileState{
-		reader: reader,
-		sessID: sessID,
-		cwd:    cwd,
-		lineNo: existing,
-		buf: NewBuffer(BufferConfig{
-			MaxLines: w.cfg.BatchMaxLines,
-			MaxAge:   w.cfg.BatchMaxAge,
-		}),
+
+	resume := hasStored && stored.Inode == currentInode && currentSize >= stored.Size
+
+	var fs *fileState
+	if resume {
+		// Resume from where the last persist left off.
+		reader, err := OpenReaderAtOffset(path, stored.Size)
+		if err != nil {
+			return err
+		}
+		sessID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		cwd := decodeProjectDir(filepath.Base(filepath.Dir(path)))
+		fs = &fileState{
+			reader: reader,
+			sessID: sessID,
+			cwd:    cwd,
+			lineNo: stored.LastLineNo,
+			buf: NewBuffer(BufferConfig{
+				MaxLines: w.cfg.BatchMaxLines,
+				MaxAge:   w.cfg.BatchMaxAge,
+			}),
+		}
+	} else {
+		// New file (no stored row, or inode/size mismatch indicating rotation/truncation).
+		// Skip historical content: lineNo = current line count, reader at EOF.
+		reader, lineCount, err := OpenReaderAtEnd(path)
+		if err != nil {
+			return err
+		}
+		sessID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		cwd := decodeProjectDir(filepath.Base(filepath.Dir(path)))
+		fs = &fileState{
+			reader: reader,
+			sessID: sessID,
+			cwd:    cwd,
+			lineNo: lineCount,
+			buf: NewBuffer(BufferConfig{
+				MaxLines: w.cfg.BatchMaxLines,
+				MaxAge:   w.cfg.BatchMaxAge,
+			}),
+		}
 	}
+
 	if err := w.persistOffset(path, fs); err != nil {
+		_ = fs.reader.Close()
 		return err
 	}
 	w.files[path] = fs
 	return nil
-}
-
-func (w *Watcher) openFile(path string) (*fileState, error) {
-	r, err := OpenReader(path)
-	if err != nil {
-		return nil, err
-	}
-	sessID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	cwd := decodeProjectDir(filepath.Base(filepath.Dir(path)))
-	return &fileState{
-		reader: r,
-		sessID: sessID,
-		cwd:    cwd,
-		buf: NewBuffer(BufferConfig{
-			MaxLines: w.cfg.BatchMaxLines,
-			MaxAge:   w.cfg.BatchMaxAge,
-		}),
-	}, nil
 }
 
 func decodeProjectDir(name string) string {

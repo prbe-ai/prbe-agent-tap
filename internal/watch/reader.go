@@ -54,6 +54,16 @@ func (r *Reader) ReadNew() ([][]byte, error) {
 	return lines, nil
 }
 
+// OpenReaderAtOffset opens path and positions the reader at byteOffset.
+// Subsequent ReadNew calls return lines starting at that offset.
+func OpenReaderAtOffset(path string, byteOffset int64) (*Reader, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	return &Reader{path: path, f: f, offset: byteOffset}, nil
+}
+
 // CurrentLineCount returns the number of complete lines in the file (used at pair time
 // to skip historical content during `watch`).
 func CurrentLineCount(path string) (int64, error) {
