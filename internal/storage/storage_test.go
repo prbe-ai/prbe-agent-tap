@@ -38,3 +38,67 @@ func TestOpenIsIdempotent(t *testing.T) {
 		s.Close()
 	}
 }
+
+func TestMetaSetGet(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.SetMeta("device_id", "abc-123"); err != nil {
+		t.Fatalf("SetMeta: %v", err)
+	}
+
+	got, err := s.GetMeta("device_id")
+	if err != nil {
+		t.Fatalf("GetMeta: %v", err)
+	}
+	if got != "abc-123" {
+		t.Fatalf("got %q want %q", got, "abc-123")
+	}
+
+	if err := s.SetMeta("device_id", "xyz-789"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetMeta("device_id")
+	if got != "xyz-789" {
+		t.Fatalf("after overwrite got %q want %q", got, "xyz-789")
+	}
+}
+
+func TestGetMetaMissingReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	got, err := s.GetMeta("nope")
+	if err != nil {
+		t.Fatalf("GetMeta missing: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("got %q want empty", got)
+	}
+}
+
+func TestDeleteMeta(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	_ = s.SetMeta("k", "v")
+	if err := s.DeleteMeta("k"); err != nil {
+		t.Fatalf("DeleteMeta: %v", err)
+	}
+	got, _ := s.GetMeta("k")
+	if got != "" {
+		t.Fatalf("after delete got %q want empty", got)
+	}
+}
