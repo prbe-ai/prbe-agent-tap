@@ -1,0 +1,17 @@
+# Binaries
+/prbe-agent-tap
+/dist/
+
+# Go test/coverage artifacts
+*.test
+*.out
+coverage.txt
+
+# IDE/editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local dev state
+/.prbe/
