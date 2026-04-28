@@ -45,7 +45,14 @@ main() {
 
   echo
   printf "Paste your pairing token from the dashboard: "
-  IFS= read -r token
+  if [ -t 0 ]; then
+    IFS= read -r token
+  elif [ -e /dev/tty ]; then
+    IFS= read -r token </dev/tty
+  else
+    echo "no TTY available; rerun and pass the token: ${bin} pair <token>" >&2
+    token=""
+  fi
   if [ -z "${token}" ]; then
     echo "no token provided; you can pair later with: ${bin} pair <token>" >&2
     exit 0
