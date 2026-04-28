@@ -60,6 +60,47 @@ func TestReadDetectsTruncation(t *testing.T) {
 	}
 }
 
+// TestOpenReaderAtEndCapturesLinesAppendedDuringOpen verifies that lines
+// appended to a file after OpenReaderAtEnd has read the existing content are
+// still picked up by the first ReadNew call (i.e. no lines are silently lost).
+func TestOpenReaderAtEndCapturesLinesAppendedDuringOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+
+	// Write two pre-existing lines.
+	existing := `{"n":1}` + "\n" + `{"n":2}` + "\n"
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, lineCount, err := OpenReaderAtEnd(path)
+	if err != nil {
+		t.Fatalf("OpenReaderAtEnd: %v", err)
+	}
+	defer reader.Close()
+
+	if lineCount != 2 {
+		t.Fatalf("expected lineCount=2, got %d", lineCount)
+	}
+
+	// Append a new line AFTER OpenReaderAtEnd has already read the file.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(`{"n":3}` + "\n")
+	_ = f.Close()
+
+	// ReadNew must return exactly the one newly-appended line.
+	lines, err := reader.ReadNew()
+	if err != nil {
+		t.Fatalf("ReadNew: %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 new line, got %d", len(lines))
+	}
+}
+
 func TestReadSkipsPartialLine(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "x.jsonl")

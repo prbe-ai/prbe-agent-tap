@@ -139,20 +139,24 @@ func (w *Watcher) registerExistingFile(path string) error {
 	if _, ok := w.files[path]; ok {
 		return nil
 	}
-	fs, err := w.openFile(path)
+	// Use a single open to atomically count existing lines and position the
+	// reader at the end of them, eliminating the TOCTOU window that existed
+	// between the old CurrentLineCount + os.Open pair.
+	reader, existing, err := OpenReaderAtEnd(path)
 	if err != nil {
 		return err
 	}
-	existing, _ := CurrentLineCount(path)
-	fs.lineNo = existing
-	if _, err := os.Stat(path); err == nil {
-		_ = fs.reader.Close()
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		info, _ := f.Stat()
-		fs.reader = &Reader{path: path, f: f, offset: info.Size()}
+	sessID := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	cwd := decodeProjectDir(filepath.Base(filepath.Dir(path)))
+	fs := &fileState{
+		reader: reader,
+		sessID: sessID,
+		cwd:    cwd,
+		lineNo: existing,
+		buf: NewBuffer(BufferConfig{
+			MaxLines: w.cfg.BatchMaxLines,
+			MaxAge:   w.cfg.BatchMaxAge,
+		}),
 	}
 	if err := w.persistOffset(path, fs); err != nil {
 		return err

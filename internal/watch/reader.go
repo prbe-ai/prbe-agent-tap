@@ -69,3 +69,32 @@ func CurrentLineCount(path string) (int64, error) {
 	lines, _, _ := SplitLines(buf)
 	return int64(len(lines)), nil
 }
+
+// OpenReaderAtEnd opens path once, reads all currently-written bytes through
+// that single file handle to compute the existing line count, then seeks to
+// the end of those bytes.  It returns the Reader (ready for subsequent
+// ReadNew calls) and the number of complete lines that were already present.
+//
+// Because a single open is used throughout, there is no TOCTOU window: any
+// bytes appended after the read will be picked up by the first ReadNew call.
+func OpenReaderAtEnd(path string) (*Reader, int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	buf, err := io.ReadAll(f)
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, err
+	}
+	lines, partial, _ := SplitLines(buf)
+	// Seek to the end of the complete lines (not the raw file size), so that
+	// a partial trailing line is re-read on the next ReadNew call.
+	offset := int64(len(buf) - partial)
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, 0, err
+	}
+	r := &Reader{path: path, f: f, offset: offset}
+	return r, int64(len(lines)), nil
+}
